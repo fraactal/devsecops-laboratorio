@@ -55,6 +55,19 @@ jobs:
             exit 1
           fi
 
+      - name: Sonar API check - project visibility
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          set -e
+          URL="https://sonarcloud.io/api/projects/search?projects=fraactal_devsecops-laboratorio"
+          CODE=$(curl -s -o resp.json -w "%{http_code}" -u "$SONAR_TOKEN:" "$URL")
+          echo "HTTP $CODE"; head -c 400 resp.json || true
+          test "$CODE" = "200"
+
+
+
+
       - name: analisis de Codigo SAST
         id: AnalisisSAST
         uses: SonarSource/sonarqube-scan-action@v6
