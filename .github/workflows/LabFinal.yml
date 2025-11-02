@@ -27,58 +27,17 @@ jobs:
           echo "Branch                   : $GITHUB_REF_NAME"
           echo "Commit                   : $GITHUB_SHA"
 
-      #- name: Listar variables
-      #  if: ${{ github.event_name != 'pull_request' }} 
-      #  run: |
-      #    echo "Variables disponibles (recortadas):"
-      #    printenv | sort | sed -e 's/\(.*TOKEN=\).*/\1*** (masked)/g' | head -n 60
-
-      #- name: Confirmar secreto existe en GitHub
-      #  run: |
-      #    if [ -n "${{ secrets.SONAR_TOKEN }}" ]; then
-      #      echo "GitHub ve el secreto SONAR_TOKEN "
-      #    else
-      #      echo "GitHub NO encuentra el secreto SONAR_TOKEN"
-      #      exit 1
-      #    fi
-
-      #- name: Confirmar variable de entorno SONAR_TOKEN
-      #  env:
-      #    SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      #  run: |
-      #    if [ -n "${SONAR_TOKEN}" ]; then
-      #      echo "SONAR_TOKEN está definido en el entorno (valor oculto)"
-      #    else
-      #      echo "SONAR_TOKEN no está en el entorno"
-      #      exit 1
-      #    fi
-
-      - name: Sonar API check - project visibility
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: |
-          set -e
-          ORG="laboratorio1"
-          PROJ="fraactal_devsecops-laboratorio"
-          URL="https://sonarcloud.io/api/projects/search?organization=${ORG}&projects=${PROJ}"
-          echo "GET $URL"
-          CODE=$(curl -s -o resp.json -w "%{http_code}" -u "$SONAR_TOKEN:" "$URL")
-          echo "HTTP $CODE"; head -c 400 resp.json || true
-          test "$CODE" = "200"
-
-      #- name: Sonar API check - quality gate (main)
+      #- name: Sonar API check - project visibility
       #  env:
       #    SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       #  run: |
       #    set -e
       #    ORG="laboratorio1"
       #    PROJ="fraactal_devsecops-laboratorio"
-      #    BR="main"
-      #    URL="https://sonarcloud.io/api/qualitygates/project_status?organization=${ORG}&projectKey=${PROJ}&branch=${BR}"
+      #    URL="https://sonarcloud.io/api/projects/search?organization=${ORG}&projects=${PROJ}"
       #    echo "GET $URL"
-      #    CODE=$(curl -s -o qg.json -w "%{http_code}" -u "$SONAR_TOKEN:" "$URL")
-      #    echo "HTTP $CODE"
-      #    head -c 400 qg.json || true
+      #    CODE=$(curl -s -o resp.json -w "%{http_code}" -u "$SONAR_TOKEN:" "$URL")
+      #    echo "HTTP $CODE"; head -c 400 resp.json || true
       #    test "$CODE" = "200"
 
       - name: analisis de Codigo SAST
@@ -87,6 +46,33 @@ jobs:
         env:
           #GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Github lo configura de forma automatica, no es necesario incluirlo 
           SONAR_TOKEN:  ${{ secrets.SONAR_TOKEN }} 
+
+
+
+      # Espera a que SonarCloud termine de procesar el reporte
+      - name: Esperar procesamiento (sonar) 
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          set -e
+          ORG="laboratorio1"
+          PROJ="fraactal_devsecops-laboratorio"
+          BR="${GITHUB_REF_NAME}"
+
+          echo "Esperando procesamiento del análisis en SonarCloud para ${PROJ} (branch=${BR}) ..."
+          ATTEMPTS=30
+          SLEEP=6
+          for i in $(seq 1 $ATTEMPTS); do
+            URL="https://sonarcloud.io/api/qualitygates/project_status?organization=${ORG}&projectKey=${PROJ}&branch=${BR}"
+            JSON=$(curl -s -u "$SONAR_TOKEN:" "$URL")
+            STATUS=$(echo "$JSON" | jq -r '.projectStatus.status // "NONE"')
+            echo "Intento $i: status=$STATUS"
+            if [ "$STATUS" != "NONE" ] && [ "$STATUS" != "PENDING" ] && [ "$STATUS" != "IN_PROGRESS" ] && [ "$STATUS" != "null" ]; then
+              echo "Procesado."
+              break
+            fi
+            sleep $SLEEP
+          done
 
       - name: Resultado SAST
         if: ${{ success() }}
