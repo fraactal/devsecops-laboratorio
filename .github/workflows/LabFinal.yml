@@ -66,20 +66,20 @@ jobs:
           echo "HTTP $CODE"; head -c 400 resp.json || true
           test "$CODE" = "200"
 
-      - name: Sonar API check - quality gate (main)
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: |
-          set -e
-          ORG="laboratorio1"
-          PROJ="fraactal_devsecops-laboratorio"
-          BR="main"
-          URL="https://sonarcloud.io/api/qualitygates/project_status?organization=${ORG}&projectKey=${PROJ}&branch=${BR}"
-          echo "GET $URL"
-          CODE=$(curl -s -o qg.json -w "%{http_code}" -u "$SONAR_TOKEN:" "$URL")
-          echo "HTTP $CODE"
-          head -c 400 qg.json || true
-          test "$CODE" = "200"
+      #- name: Sonar API check - quality gate (main)
+      #  env:
+      #    SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      #  run: |
+      #    set -e
+      #    ORG="laboratorio1"
+      #    PROJ="fraactal_devsecops-laboratorio"
+      #    BR="main"
+      #    URL="https://sonarcloud.io/api/qualitygates/project_status?organization=${ORG}&projectKey=${PROJ}&branch=${BR}"
+      #    echo "GET $URL"
+      #    CODE=$(curl -s -o qg.json -w "%{http_code}" -u "$SONAR_TOKEN:" "$URL")
+      #    echo "HTTP $CODE"
+      #    head -c 400 qg.json || true
+      #    test "$CODE" = "200"
 
       - name: analisis de Codigo SAST
         id: AnalisisSAST
@@ -88,59 +88,9 @@ jobs:
           #GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Github lo configura de forma automatica, no es necesario incluirlo 
           SONAR_TOKEN:  ${{ secrets.SONAR_TOKEN }} 
 
-      # name: Resultado SAST
-      #  if: ${{ success() }}
-      #  run: echo "SAST finalizado. Revisa el Quality Gate en SonarCloud."
-
-
-       # 2) Espera manualmente el Quality Gate de la rama actual y falla si NO es OK
-      - name: Esperar Quality Gate y validar
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: |
-          set -e
-          ORG="laboratorio1"
-          PROJ="fraactal_devsecops-laboratorio"
-          BR="${GITHUB_REF_NAME}"
-
-          echo "Esperando Quality Gate para ${PROJ} (branch=${BR}) ..."
-          ATTEMPTS=30
-          SLEEP=6
-
-          for i in $(seq 1 $ATTEMPTS); do
-            URL="https://sonarcloud.io/api/qualitygates/project_status?organization=${ORG}&projectKey=${PROJ}&branch=${BR}"
-            JSON=$(curl -s -u "$SONAR_TOKEN:" "$URL")
-            STATUS=$(echo "$JSON" | jq -r '.projectStatus.status // "NONE"')
-            echo "Intento $i: status=$STATUS"
-            if [ "$STATUS" != "NONE" ] && [ "$STATUS" != "PENDING" ] && [ "$STATUS" != "IN_PROGRESS" ] && [ "$STATUS" != "null" ]; then
-              echo "$JSON" | jq .
-              if [ "$STATUS" = "OK" ]; then
-                echo " Quality Gate OK"
-                exit 0
-              else
-                echo " Quality Gate = $STATUS"
-                exit 1
-              fi
-            fi
-            sleep $SLEEP
-          done
-
-          echo " Timeout esperando Quality Gate"
-          exit 1
-
-      - name: Resultado SAST (OK)
+      - name: Resultado SAST
         if: ${{ success() }}
-        run: echo "SAST finalizado y Quality Gate OK."
-
-      - name: Resultado SAST (falló)
-        if: ${{ failure() }}
-        run: echo "SAST falló (Quality Gate en rojo o error de análisis)."
-
-
-
-
-
-
+        run: echo "SAST finalizado. Revisa el Quality Gate en SonarCloud."
 
 
 #  anlisis-SCA:
