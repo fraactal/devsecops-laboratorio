@@ -60,9 +60,29 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           set -e
-          URL="https://sonarcloud.io/api/projects/search?projects=fraactal_devsecops-laboratorio"
+          ORG="laboratorio1"
+          PROJ="fraactal_devsecops-laboratorio"
+          URL="https://sonarcloud.io/api/projects/search?organization=${ORG}&projects=${PROJ}"
+          echo "GET $URL"
           CODE=$(curl -s -o resp.json -w "%{http_code}" -u "$SONAR_TOKEN:" "$URL")
-          echo "HTTP $CODE"; head -c 400 resp.json || true
+          echo "HTTP $CODE"
+          head -c 400 resp.json || true
+          test "$CODE" = "200"
+
+
+      - name: Sonar API check - quality gate (main)
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          set -e
+          ORG="laboratorio1"
+          PROJ="fraactal_devsecops-laboratorio"
+          BR="main"
+          URL="https://sonarcloud.io/api/qualitygates/project_status?organization=${ORG}&projectKey=${PROJ}&branch=${BR}"
+          echo "GET $URL"
+          CODE=$(curl -s -o qg.json -w "%{http_code}" -u "$SONAR_TOKEN:" "$URL")
+          echo "HTTP $CODE"
+          head -c 400 qg.json || true
           test "$CODE" = "200"
 
 
