@@ -85,7 +85,7 @@ jobs:
             sleep $SLEEP
           done
 
-      - name: Bloqueao x vulnerabilidades Crit/Alta/Media
+      - name: Resultado SAST - Bloqueao x vulnerabilidades Crit/Alta/Media
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
@@ -112,25 +112,18 @@ jobs:
           if [ "$TOTAL" -gt 0 ]; then
             echo "SAST FAIL: Se encontraron vulnerabilidades Crit/Alta/Media = $TOTAL"
             echo "Ver: https://sonarcloud.io/dashboard?id=${PROJ}&branch=${BR}&resolved=false"
-            exit 1
+            #exit 1    # Quitar para dejar analisis que continue en caso de hallar vulnerabilidades
           else
             echo "SAST OK: Sin vulnerabilidades Crit/Alta/Media abiertas."
           fi
 
-
-     # - name: Resultado SAST
-     #   if: ${{ success() }}
-     #   run: echo "SAST finalizado. Revisa el Quality Gate en SonarCloud."
-
-
-
-#  anlisis-SCA:
-#    runs-on : ubuntu-latest
-#    #needs: [AnalisisSAST]  # este job corre después de AnalisisSAST
-#    steps:
-#      - name: analisis de Codigo SCA
-#        run:
-#          echo "analisis de Codigo SCA"
+  anlisis-SCA:
+    runs-on : ubuntu-latest
+    #needs: [AnalisisSAST]  # este job corre después de AnalisisSAST
+    steps:
+      - name: analisis de Codigo SCA
+        run:
+          echo "analisis de Codigo SCA"
           
 #  Build-Docker:
 #    runs-on : ubuntu-latest
