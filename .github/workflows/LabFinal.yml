@@ -48,9 +48,44 @@ jobs:
           SONAR_TOKEN:  ${{ secrets.SONAR_TOKEN }} 
 
 
+      - name: Esperar procesamiento (Compute Engine)
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          set -e
+          PROJ="fraactal_devsecops-laboratorio"
+          BR="${GITHUB_REF_NAME}"
 
-      # Espera a que SonarCloud termine de procesar el reporte
-      - name: Esperar procesamiento (sonar) 
+          echo "Esperando CE para ${PROJ} (branch=${BR}) ..."
+          ATTEMPTS=50
+          SLEEP=6
+          for i in $(seq 1 $ATTEMPTS); do
+            URL="https://sonarcloud.io/api/ce/activity?component=${PROJ}&branch=${BR}&onlyCurrents=true"
+            JSON=$(curl -s -u "$SONAR_TOKEN:" "$URL")
+            STATUS=$(echo "$JSON" | jq -r '.tasks[0].status // "NONE"')
+            TASKID=$(echo "$JSON" | jq -r '.tasks[0].id // ""')
+            echo "Intento $i: CE task=${TASKID:-<none>} status=${STATUS}"
+
+            case "$STATUS" in
+              SUCCESS)
+                echo "CE OK (procesado)."
+                break
+                ;;
+              FAILED|CANCELED)
+                echo "CE terminó en estado $STATUS"; echo "$JSON" | jq .
+                exit 1
+                ;;
+              NONE|PENDING|IN_PROGRESS|null|"")
+                # sigue esperando
+                ;;
+              *)
+                echo "Estado desconocido: $STATUS (seguiré esperando)"
+                ;;
+            esac
+            sleep $SLEEP
+          done
+
+      - name: Bloqueao x vulnerabilidades Crit/Alta/Media
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
@@ -58,25 +93,35 @@ jobs:
           ORG="laboratorio1"
           PROJ="fraactal_devsecops-laboratorio"
           BR="${GITHUB_REF_NAME}"
+          BASE="https://sonarcloud.io/api/issues/search?organization=${ORG}&projectKey=${PROJ}&types=VULNERABILITY&statuses=OPEN,CONFIRMED,REOPENED&branch=${BR}&ps=1"
 
-          echo "Esperando procesamiento del análisis en SonarCloud para ${PROJ} (branch=${BR}) ..."
-          ATTEMPTS=30
-          SLEEP=6
-          for i in $(seq 1 $ATTEMPTS); do
-            URL="https://sonarcloud.io/api/qualitygates/project_status?organization=${ORG}&projectKey=${PROJ}&branch=${BR}"
-            JSON=$(curl -s -u "$SONAR_TOKEN:" "$URL")
-            STATUS=$(echo "$JSON" | jq -r '.projectStatus.status // "NONE"')
-            echo "Intento $i: status=$STATUS"
-            if [ "$STATUS" != "NONE" ] && [ "$STATUS" != "PENDING" ] && [ "$STATUS" != "IN_PROGRESS" ] && [ "$STATUS" != "null" ]; then
-              echo "Procesado."
-              break
-            fi
-            sleep $SLEEP
-          done
+          get_total () { 
+            curl -s -u "$SONAR_TOKEN:" "${BASE}&severities=$1" | jq -r '.total'
+          }
 
-      - name: Resultado SAST
-        if: ${{ success() }}
-        run: echo "SAST finalizado. Revisa el Quality Gate en SonarCloud."
+          C=$(get_total CRITICAL)
+          H=$(get_total MAJOR)
+          M=$(get_total MINOR)
+
+          echo "Vulnerabilidades abiertas (branch=$BR):"
+          echo "  CRITICAL: $C"
+          echo "  MAJOR   : $H"
+          echo "  MINOR   : $M"
+
+          TOTAL=$((C+H+M))
+          if [ "$TOTAL" -gt 0 ]; then
+            echo "SAST FAIL: Se encontraron vulnerabilidades Crit/Alta/Media = $TOTAL"
+            echo "Ver: https://sonarcloud.io/dashboard?id=${PROJ}&branch=${BR}&resolved=false"
+            exit 1
+          else
+            echo "SAST OK: Sin vulnerabilidades Crit/Alta/Media abiertas."
+          fi
+
+
+     # - name: Resultado SAST
+     #   if: ${{ success() }}
+     #   run: echo "SAST finalizado. Revisa el Quality Gate en SonarCloud."
+
 
 
 #  anlisis-SCA:
