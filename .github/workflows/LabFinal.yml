@@ -185,7 +185,7 @@ jobs:
 
     
 # === 4) Build Docker Image === 
-  Build-Docker-Image- Trivy-Local-Scan:
+  Build-Docker-Image-Trivy-Local-Scan:
     #needs: anlisis-SCA    # Se comenta porque OWASP Dependency Check demora mucho
     needs: anlisis-SAST    
     runs-on: ubuntu-latest
