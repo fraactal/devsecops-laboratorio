@@ -118,76 +118,72 @@ jobs:
           fi
 
   # === SCA (OWASP Dependency-Check) ===
- # anlisis-SCA:
- #   needs: anlisis-SAST    # Puede ejecutarse a modo paralelo al comentar esta linea
- #   runs-on: ubuntu-latest
- #   steps:
- #     - name: Checkout
- #       uses: actions/checkout@v4
- #       with:
- #         fetch-depth: 0
+  anlisis-SCA:
+    needs: anlisis-SAST    # Puede ejecutarse a modo paralelo al comentar esta linea
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      # (Opcional pero recomendado) Cache de la base NVD para acelerar y evitar rate limits
- #     - name: Cache Dependency-Check DB
- #       uses: actions/cache@v4
- #       with:
- #         path: ${{ runner.temp }}/dc
- #         key: dc-cache-${{ runner.os }}-v1
+      # Cache de la base NVD para acelerar y evitar rate limits
+      - name: Cache Dependency-Check DB
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/dc
+          key: dc-cache-${{ runner.os }}-v1
 
       # OWASP Dependency-Check con Docker
- #     - name: Run OWASP Dependency-Check (Docker)
- #       env:
-          # Si tienes NVD API Key, agrega un secreto NVD_API_KEY y descomenta la opción --nvdApiKey
- #         NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
- #       run: |
- #         set -e
- #         mkdir -p "${RUNNER_TEMP}/dc" "${RUNNER_TEMP}/reports"
- #         docker run --rm \
- #           -v "${{ github.workspace }}:/src" \
- #           -v "${RUNNER_TEMP}/dc:/usr/share/dependency-check/data" \
- #           -v "${RUNNER_TEMP}/reports:/report" \
- #           owasp/dependency-check:latest \
- #           --scan /src \
- #           --format HTML \
- #           --format JSON \
- #           --format SARIF \
- #           --out /report \
- #           --project "${GITHUB_REPOSITORY}@${GITHUB_REF_NAME}" \
- #           --failOnCVSS 4.0 \
- #           --enableRetired \
- #           ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"}
+      - name: Run OWASP Dependency-Check (Docker)
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          set -e
+          mkdir -p "${RUNNER_TEMP}/dc" "${RUNNER_TEMP}/reports"
+          docker run --rm \
+            -v "${{ github.workspace }}:/src" \
+            -v "${RUNNER_TEMP}/dc:/usr/share/dependency-check/data" \
+            -v "${RUNNER_TEMP}/reports:/report" \
+            owasp/dependency-check:latest \
+            --scan /src \
+            --format HTML \
+            --format JSON \
+            --format SARIF \
+            --out /report \
+            --project "${GITHUB_REPOSITORY}@${GITHUB_REF_NAME}" \
+            --failOnCVSS 4.0 \
+            --enableRetired \
+            ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"}
       
       ###   --failOnCVSS 4.0 \ Si falla se detiene el pipeline
 
-
-      # (Opcional) Imprimir conteo por severidad como evidencia
-  #    - name: Mostrar resumen de vulnerabilidades por severidad
-  #      run: |
-  #        set -e
-  #        REPORT="${RUNNER_TEMP}/reports/dependency-check-report.json"
-  #        if [ ! -f "$REPORT" ]; then
-  #          echo "No se encontró el reporte JSON en $REPORT"; exit 1
-  #        fi
+      - name: Mostrar resumen de vulnerabilidades 
+        run: |
+          set -e
+          REPORT="${RUNNER_TEMP}/reports/dependency-check-report.json"
+          if [ ! -f "$REPORT" ]; then
+            echo "No se encontró el reporte JSON en $REPORT"; exit 1
+          fi
           # Cuenta CRITICAL/HIGH/MEDIUM desde JSON (toma el mejor campo disponible)
-  #        jq -r '
-  #          [ .dependencies[]?.vulnerabilities[]?
-  #            | ( .severity // .cvssv3?.baseSeverity // .cvssv2?.severity // "UNKNOWN" )
-  #          ] | group_by(.) | map({ key: .[0], count: length })' "$REPORT"
+          jq -r '
+            [ .dependencies[]?.vulnerabilities[]?
+              | ( .severity // .cvssv3?.baseSeverity // .cvssv2?.severity // "UNKNOWN" )
+            ] | group_by(.) | map({ key: .[0], count: length })' "$REPORT"
 
-  #    - name: Upload Dependency-Check reports
-  #      uses: actions/upload-artifact@v4
-  #      with:
-  #        name: dependency-check-reports
-  #        path: |
-  #          ${{ runner.temp }}/reports/dependency-check-report.html
-  #          ${{ runner.temp }}/reports/dependency-check-report.json
-  #          ${{ runner.temp }}/reports/dependency-check-report.sarif
+      - name: Upload Dependency-Check reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-reports
+          path: |
+            ${{ runner.temp }}/reports/dependency-check-report.html
+            ${{ runner.temp }}/reports/dependency-check-report.json
+            ${{ runner.temp }}/reports/dependency-check-report.sarif
 
-    
-# === 4) Build Docker Image === 
+     
   Build-Docker-Trivy-Scan:
-    #needs: anlisis-SCA    # Se comenta porque OWASP Dependency Check demora mucho
-    needs: anlisis-SAST    
+    needs: anlisis-SCA    # Se comenta porque OWASP Dependency Check demora mucho
+    #needs: anlisis-SAST    
     runs-on: ubuntu-latest
     env:
       IMAGE_NAME: reddit-clone
