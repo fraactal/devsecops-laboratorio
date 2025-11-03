@@ -134,7 +134,7 @@ jobs:
           key: dc-cache-${{ runner.os }}-v1
 
       # OWASP Dependency-Check con Docker
-      - name: Run OWASP Dependency-Check 
+      - name: Run OWASP Dependency-Check (Docker)
         env:
           # Si tienes NVD API Key, agrega un secreto NVD_API_KEY y descomenta la opción --nvdApiKey
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
@@ -147,12 +147,17 @@ jobs:
             -v "${RUNNER_TEMP}/reports:/report" \
             owasp/dependency-check:latest \
             --scan /src \
-            --format "HTML,JSON,SARIF" \
+            --format HTML \
+            --format JSON \
+            --format SARIF \
             --out /report \
             --project "${GITHUB_REPOSITORY}@${GITHUB_REF_NAME}" \
             --failOnCVSS 4.0 \
             --enableRetired \
             ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"}
+
+
+
 
       # (Opcional) Imprimir conteo por severidad como evidencia
       - name: Mostrar resumen de vulnerabilidades por severidad
