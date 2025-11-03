@@ -119,6 +119,7 @@ jobs:
 
   # === SCA (OWASP Dependency-Check) ===
  # anlisis-SCA:
+ #   needs: anlisis-SAST    # Puede ejecutarse a modo paralelo al comentar esta linea
  #   runs-on: ubuntu-latest
  #   steps:
  #     - name: Checkout
@@ -183,9 +184,10 @@ jobs:
   #          ${{ runner.temp }}/reports/dependency-check-report.sarif
 
     
-# === 4) Build Docker Image ===
-  Build-Docker-Image:
-    #needs: sca    # Se comenta sección porque demora mucho el analisis Owasp
+# === 4) Build Docker Image === 
+  Build-Docker-Image- Trivy-Local-Scan:
+    #needs: anlisis-SCA    # Se comenta porque OWASP Dependency Check demora mucho
+    needs: anlisis-SAST    
     runs-on: ubuntu-latest
     env:
       IMAGE_NAME: reddit-clone
@@ -210,7 +212,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          load: true       # no publica nada, carga en daemon local
+          load: true        # no publica, carga en daemon local
           tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
@@ -221,19 +223,11 @@ jobs:
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
       - name: Mostrar imágenes locales
-        run: docker images | head -n 20
+        run: |
+          echo "Listado de imágenes locales:"
+          docker images | head -n 20
 
-
-# === 5) Trivy Image Scan ===
-  Image-Security-Trivy:
-    needs: Build-Docker-Image
-    runs-on: ubuntu-latest
-    env:
-      IMAGE_NAME: reddit-clone
-      IMAGE_TAG: ${{ github.sha }}
-    steps:
-      - uses: actions/checkout@v4
-
+      # === 5) Image Security Scan con Trivy ===
       - name: Cache Trivy DB
         uses: actions/cache@v4
         with:
@@ -242,7 +236,7 @@ jobs:
           restore-keys: |
             trivy-db-
 
-      - name: Trivy scan (fail on Medium/High/Critical)
+      - name: Ejecutar análisis de vulnerabilidades con Trivy
         uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
@@ -251,18 +245,19 @@ jobs:
           vuln-type: 'os,library'
           severity: 'MEDIUM,HIGH,CRITICAL'
           ignore-unfixed: false
-          exit-code: '1'               # BLOQUEA si hay Medium/high/critical
+          exit-code: '1'    # BLOQUEA el pipeline si hay Medium/High/Critical
 
-      - name: Trivy table report
+      - name: Generar reporte tabular de Trivy
         if: always()
         run: |
+          echo "Generando reporte de vulnerabilidades..."
           trivy image --severity MEDIUM,HIGH,CRITICAL \
             --vuln-type os,library \
             --ignore-unfixed=false \
             --format table \
             ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} | tee trivy-image.txt
 
-      - name: Upload Trivy reports
+      - name: Subir reportes de Trivy
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -270,15 +265,6 @@ jobs:
           path: |
             trivy-image.sarif
             trivy-image.txt
-
-
-
-#  Image-Security:
-#    runs-on : ubuntu-latest
-#    steps:
-#      - name: Image Security
-#        run:
-#          echo "Image Security"
 
 
 #1. Clonación del repositorio.
