@@ -118,80 +118,111 @@ jobs:
           fi
 
   # === SCA (OWASP Dependency-Check) ===
-  anlisis-SCA:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+ # anlisis-SCA:
+ #   runs-on: ubuntu-latest
+ #   steps:
+ #     - name: Checkout
+ #       uses: actions/checkout@v4
+ #       with:
+ #         fetch-depth: 0
 
       # (Opcional pero recomendado) Cache de la base NVD para acelerar y evitar rate limits
-      - name: Cache Dependency-Check DB
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/dc
-          key: dc-cache-${{ runner.os }}-v1
+ #     - name: Cache Dependency-Check DB
+ #       uses: actions/cache@v4
+ #       with:
+ #         path: ${{ runner.temp }}/dc
+ #         key: dc-cache-${{ runner.os }}-v1
 
       # OWASP Dependency-Check con Docker
-      - name: Run OWASP Dependency-Check (Docker)
-        env:
+ #     - name: Run OWASP Dependency-Check (Docker)
+ #       env:
           # Si tienes NVD API Key, agrega un secreto NVD_API_KEY y descomenta la opción --nvdApiKey
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        run: |
-          set -e
-          mkdir -p "${RUNNER_TEMP}/dc" "${RUNNER_TEMP}/reports"
-          docker run --rm \
-            -v "${{ github.workspace }}:/src" \
-            -v "${RUNNER_TEMP}/dc:/usr/share/dependency-check/data" \
-            -v "${RUNNER_TEMP}/reports:/report" \
-            owasp/dependency-check:latest \
-            --scan /src \
-            --format HTML \
-            --format JSON \
-            --format SARIF \
-            --out /report \
-            --project "${GITHUB_REPOSITORY}@${GITHUB_REF_NAME}" \
-            --failOnCVSS 4.0 \
-            --enableRetired \
-            ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"}
-
-
+ #         NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+ #       run: |
+ #         set -e
+ #         mkdir -p "${RUNNER_TEMP}/dc" "${RUNNER_TEMP}/reports"
+ #         docker run --rm \
+ #           -v "${{ github.workspace }}:/src" \
+ #           -v "${RUNNER_TEMP}/dc:/usr/share/dependency-check/data" \
+ #           -v "${RUNNER_TEMP}/reports:/report" \
+ #           owasp/dependency-check:latest \
+ #           --scan /src \
+ #           --format HTML \
+ #           --format JSON \
+ #           --format SARIF \
+ #           --out /report \
+ #           --project "${GITHUB_REPOSITORY}@${GITHUB_REF_NAME}" \
+ #           --failOnCVSS 4.0 \
+ #           --enableRetired \
+ #           ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"}
+      
+      ###   --failOnCVSS 4.0 \ Si falla se detiene el pipeline
 
 
       # (Opcional) Imprimir conteo por severidad como evidencia
-      - name: Mostrar resumen de vulnerabilidades por severidad
-        run: |
-          set -e
-          REPORT="${RUNNER_TEMP}/reports/dependency-check-report.json"
-          if [ ! -f "$REPORT" ]; then
-            echo "No se encontró el reporte JSON en $REPORT"; exit 1
-          fi
+  #    - name: Mostrar resumen de vulnerabilidades por severidad
+  #      run: |
+  #        set -e
+  #        REPORT="${RUNNER_TEMP}/reports/dependency-check-report.json"
+  #        if [ ! -f "$REPORT" ]; then
+  #          echo "No se encontró el reporte JSON en $REPORT"; exit 1
+  #        fi
           # Cuenta CRITICAL/HIGH/MEDIUM desde JSON (toma el mejor campo disponible)
-          jq -r '
-            [ .dependencies[]?.vulnerabilities[]?
-              | ( .severity // .cvssv3?.baseSeverity // .cvssv2?.severity // "UNKNOWN" )
-            ] | group_by(.) | map({ key: .[0], count: length })' "$REPORT"
+  #        jq -r '
+  #          [ .dependencies[]?.vulnerabilities[]?
+  #            | ( .severity // .cvssv3?.baseSeverity // .cvssv2?.severity // "UNKNOWN" )
+  #          ] | group_by(.) | map({ key: .[0], count: length })' "$REPORT"
 
-      # Subir reportes como artefactos (útiles para el PDF del entregable)
-      - name: Upload Dependency-Check reports
-        uses: actions/upload-artifact@v4
+  #    - name: Upload Dependency-Check reports
+  #      uses: actions/upload-artifact@v4
+  #      with:
+  #        name: dependency-check-reports
+  #        path: |
+  #          ${{ runner.temp }}/reports/dependency-check-report.html
+  #          ${{ runner.temp }}/reports/dependency-check-report.json
+  #          ${{ runner.temp }}/reports/dependency-check-report.sarif
+
+    
+# === 4) Build Docker Image ===
+  Build-Docker-Image:
+    #needs: sca    # Se comenta sección porque demora mucho el analisis Owasp
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_NAME: reddit-clone
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
         with:
-          name: dependency-check-reports
-          path: |
-            ${{ runner.temp }}/reports/dependency-check-report.html
-            ${{ runner.temp }}/reports/dependency-check-report.json
-            ${{ runner.temp }}/reports/dependency-check-report.sarif
+          path: /tmp/.buildx-cache
+          key: buildx-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            buildx-${{ runner.os }}-
 
+      - name: Build image (local)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true       # no publica nada, carga en daemon local
+          tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new
 
-          
-#  Build-Docker:
-#    runs-on : ubuntu-latest
-#    steps:
-#      - name: Build Docker
-#        run:
-#          echo "Build Docker"
-##      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+      - name: Move build cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      - name: Mostrar imágenes locales
+        run: docker images | head -n 20
+
 
 
 #  Image-Security:
