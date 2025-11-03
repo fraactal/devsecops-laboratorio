@@ -227,7 +227,7 @@ jobs:
           echo "Listado de imágenes locales:"
           docker images | head -n 20
 
-      # === 5) Image Security Scan con Trivy ===
+      # Image Security Scan con Trivy 
       - name: Cache Trivy DB
         uses: actions/cache@v4
         with:
@@ -236,26 +236,16 @@ jobs:
           restore-keys: |
             trivy-db-
 
-      - name: Ejecutar análisis de vulnerabilidades con Trivy
+      - name: Ejecutar Trivy 
         uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          format: sarif
-          output: trivy-image.sarif
+          format: 'table,sarif'                  # genera ambos reportes
+          output: 'trivy-image.txt,trivy-image.sarif'
           vuln-type: 'os,library'
           severity: 'MEDIUM,HIGH,CRITICAL'
           ignore-unfixed: false
-          #exit-code: '1'   # bloquear sección para continuar con el reporte    
-
-      - name: Generar reporte tabular de Trivy
-        if: always()
-        run: |
-          echo "Generando reporte de vulnerabilidades..."
-          trivy image --severity MEDIUM,HIGH,CRITICAL \
-            --vuln-type os,library \
-            --ignore-unfixed=false \
-            --format table \
-            ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} | tee trivy-image.txt
+          exit-code: '1'                         # BLOQUEA el pipeline si hay Medium+
 
       - name: Subir reportes de Trivy
         if: always()
@@ -265,6 +255,14 @@ jobs:
           path: |
             trivy-image.sarif
             trivy-image.txt
+      
+      - name: Publicar SARIF en Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+
+
 
 
 #1. Clonación del repositorio.
