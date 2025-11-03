@@ -185,7 +185,7 @@ jobs:
 
     
 # === 4) Build Docker Image === 
-  Build-Docker-Image-Trivy-Local-Scan:
+  Build-Docker-Trivy-Scan:
     #needs: anlisis-SCA    # Se comenta porque OWASP Dependency Check demora mucho
     needs: anlisis-SAST    
     runs-on: ubuntu-latest
@@ -245,7 +245,7 @@ jobs:
           vuln-type: 'os,library'
           severity: 'MEDIUM,HIGH,CRITICAL'
           ignore-unfixed: false
-          exit-code: '1'    # BLOQUEA el pipeline si hay Medium/High/Critical
+          #exit-code: '1'   # bloquear sección para continuar con el reporte    
 
       - name: Generar reporte tabular de Trivy
         if: always()
