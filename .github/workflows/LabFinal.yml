@@ -121,9 +121,6 @@ jobs:
   anlisis-SCA:
     needs: anlisis-SAST
     runs-on: ubuntu-latest
-    env:
-      DC_DATA_DIR: ${{ runner.temp }}/dc
-      DC_REPORT_DIR: ${{ runner.temp }}/reports
 
     steps:
       - name: Checkout
@@ -131,7 +128,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Cachea la DB de Dependency-Check para no bajar todo cada vez
+      # Definir rutas usando RUNNER_TEMP y exportarlas a GITHUB_ENV para pasos siguientes
+      - name: Definir rutas SCA
+        run: |
+          echo "DC_DATA_DIR=$RUNNER_TEMP/dc" >> "$GITHUB_ENV"
+          echo "DC_REPORT_DIR=$RUNNER_TEMP/reports" >> "$GITHUB_ENV"
+
+      # Cachea la DB de Dependency-Check
       - name: Cache Dependency-Check DB
         uses: actions/cache@v4
         with:
@@ -148,8 +151,7 @@ jobs:
         id: dcscan
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        # Si quieres que este paso NO corte el job para poder subir reportes, deja continue-on-error: true
-        continue-on-error: true
+        continue-on-error: true   # deja subir reportes aunque falle por CVSS
         run: |
           set -e
           # Limpia posibles locks viejos
@@ -170,14 +172,13 @@ jobs:
             ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"} \
             --log /report/dc.log
 
-          echo "exitcode=$?" >> "$GITHUB_OUTPUT"
           echo "Contenido de reportes:"
           ls -la "${DC_REPORT_DIR}" || true
 
       - name: Mostrar resumen (si existe JSON)
         if: always()
         run: |
-          REPORT="${{ env.DC_REPORT_DIR }}/dependency-check-report.json"
+          REPORT="${DC_REPORT_DIR}/dependency-check-report.json"
           if [ -f "$REPORT" ]; then
             jq -r '
               [ .dependencies[]?.vulnerabilities[]?
@@ -188,7 +189,7 @@ jobs:
             echo "No se encontró $REPORT"
           fi
           echo "Log de DC (si existe):"
-          test -f "${{ env.DC_REPORT_DIR }}/dc.log" && tail -n 200 "${{ env.DC_REPORT_DIR }}/dc.log" || echo "Sin dc.log"
+          test -f "${DC_REPORT_DIR}/dc.log" && tail -n 200 "${DC_REPORT_DIR}/dc.log" || echo "Sin dc.log"
 
       - name: Subir reportes como artefacto
         if: always()
@@ -207,12 +208,12 @@ jobs:
         with:
           sarif_file: ${{ env.DC_REPORT_DIR }}/dependency-check-report.sarif
 
-      # Enforce: si quieres BLOQUEAR el job cuando hallan MEDIUM+ descomenta el exit 1
+      # Opcional: bloquear job si el paso anterior falló (por CVSS >=4.0)
       - name: Enforzar fallo si hubo vulnerabilidades MEDIUM+
-        if: ${{ steps.dcscan.outcomes != '' && steps.dcscan.outcome == 'failure' }}
+        if: ${{ steps.dcscan.outcome == 'failure' }}
         run: |
           echo "Falla SCA: se detectaron vulnerabilidades CVSS >= 4.0"
-          # exit 1
+          # exit 1   # ← descomenta para bloquear el job
 
       
   Build-Docker-Trivy-Scan:
