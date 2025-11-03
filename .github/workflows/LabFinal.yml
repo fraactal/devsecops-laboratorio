@@ -117,7 +117,7 @@ jobs:
             echo "SAST OK: Sin vulnerabilidades Crit/Alta/Media abiertas."
           fi
 
- # === SCA (OWASP Dependency-Check) ===
+# === SCA (OWASP Dependency-Check) ===
   anlisis-SCA:
     needs: anlisis-SAST
     runs-on: ubuntu-latest
@@ -197,15 +197,21 @@ jobs:
           RC=$?
           echo "exitcode=$RC" >> "$GITHUB_OUTPUT"
           echo "RC=$RC"
-          echo "📂 Contenido de /report tras primer scan:"
+          echo "Contenido de /report tras primer scan:"
           ls -la "${RUNNER_TEMP}/reports" || true
           set -e
 
       # Fallback: si no hay reportes, reintenta sin bloquear para generarlos
       - name: Reintentar scan para generar reportes (fallback)
-        if: always() && !exists(join('/', runner.temp, 'reports', 'dependency-check-report.json'))
+        if: always()
         run: |
-          echo "ℹ️ No se generaron reportes; reintentando scan sin bloqueo..."
+          set -e
+          REPORT_JSON="${RUNNER_TEMP}/reports/dependency-check-report.json"
+          if [ -f "$REPORT_JSON" ]; then
+            echo "ℹYa existe $REPORT_JSON. Omitiendo fallback."
+            exit 0
+          fi
+          echo "No se generaron reportes; reintentando scan sin bloqueo..."
           docker run --rm \
             -v "${{ github.workspace }}:/src" \
             -v "${RUNNER_TEMP}/dc:/usr/share/dependency-check/data" \
@@ -221,22 +227,31 @@ jobs:
             --failOnCVSS 11 \
             --disableVersionCheck \
             --log /report/dc.log
-          echo "📂 Contenido de /report tras fallback:"
+          echo "Contenido de /report tras fallback:"
           ls -la "${RUNNER_TEMP}/reports" || true
 
-      - name: Mostrar resumen (si existe JSON)
-        if: always()
+      # Exponer como outputs si existen los reportes
+      - name: Chequear reportes generados
+        id: dcreports
         run: |
-          REPORT="${RUNNER_TEMP}/reports/dependency-check-report.json"
-          if [ -f "$REPORT" ]; then
-            jq -r '
-              [ .dependencies[]?.vulnerabilities[]?
-                | ( .severity // .cvssv3?.baseSeverity // .cvssv2?.severity // "UNKNOWN" )
-              ] | group_by(.) | map({ severity: .[0], count: length })
-            ' "$REPORT"
-          else
-            echo "No se encontró $REPORT"
-          fi
+          JSON="${RUNNER_TEMP}/reports/dependency-check-report.json"
+          SARIF="${RUNNER_TEMP}/reports/dependency-check-report.sarif"
+          HTML="${RUNNER_TEMP}/reports/dependency-check-report.html"
+          test -f "$JSON"  && echo "json_exists=true"  >> "$GITHUB_OUTPUT" || echo "json_exists=false"  >> "$GITHUB_OUTPUT"
+          test -f "$SARIF" && echo "sarif_exists=true" >> "$GITHUB_OUTPUT" || echo "sarif_exists=false" >> "$GITHUB_OUTPUT"
+          echo "sarif_path=$SARIF" >> "$GITHUB_OUTPUT"
+          echo "json_path=$JSON"   >> "$GITHUB_OUTPUT"
+          echo "html_path=$HTML"   >> "$GITHUB_OUTPUT"
+
+      - name: Mostrar resumen (si existe JSON)
+        if: always() && steps.dcreports.outputs.json_exists == 'true'
+        run: |
+          REPORT="${{ steps.dcreports.outputs.json_path }}"
+          jq -r '
+            [ .dependencies[]?.vulnerabilities[]?
+              | ( .severity // .cvssv3?.baseSeverity // .cvssv2?.severity // "UNKNOWN" )
+            ] | group_by(.) | map({ severity: .[0], count: length })
+          ' "$REPORT"
           echo "Log de DC (si existe):"
           test -f "${RUNNER_TEMP}/reports/dc.log" && tail -n 200 "${RUNNER_TEMP}/reports/dc.log" || echo "Sin dc.log"
 
@@ -252,18 +267,17 @@ jobs:
             ${{ runner.temp }}/reports/dc.log
 
       - name: Publicar SARIF en Code Scanning
-        if: always() && exists(join('/', runner.temp, 'reports', 'dependency-check-report.sarif'))
+        if: always() && steps.dcreports.outputs.sarif_exists == 'true'
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: ${{ runner.temp }}/reports/dependency-check-report.sarif
+          sarif_file: ${{ steps.dcreports.outputs.sarif_path }}
 
-      # Enforce: si el primer scan falló por CVSS >= 4.0, exit 1
+      # Enforce: si el primer scan falló por CVSS >= 4.0, exit 1 (descomenta para bloquear)
       - name: Enforzar fallo si hubo vulnerabilidades MEDIUM+
         if: ${{ steps.dcscan.outputs.exitcode && steps.dcscan.outputs.exitcode != '0' }}
         run: |
           echo "Falla SCA: se detectaron vulnerabilidades CVSS >= 4.0"
-          #exit 1  Se comenta para que el job continue
-
+          # exit 1  # <- quita el comentario si quieres bloquear el pipeline
 
      
   Build-Docker-Trivy-Scan:
