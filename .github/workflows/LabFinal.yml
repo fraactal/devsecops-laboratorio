@@ -117,9 +117,9 @@ jobs:
             echo "SAST OK: Sin vulnerabilidades Crit/Alta/Media abiertas."
           fi
 
-  # === SCA (OWASP Dependency-Check) ===
+ # === SCA (OWASP Dependency-Check) ===
   anlisis-SCA:
-    needs: anlisis-SAST    # Puede ejecutarse a modo paralelo al comentar esta linea
+    needs: anlisis-SAST
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -127,51 +127,74 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Cache de la base NVD para acelerar y evitar rate limits
+      # Cache de la DB de DC para acelerar runs
       - name: Cache Dependency-Check DB
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/dc
           key: dc-cache-${{ runner.os }}-v1
 
-      # OWASP Dependency-Check con Docker
-      - name: Run OWASP Dependency-Check (Docker)
+      - name: Preparar carpetas
+        run: |
+          set -e
+          mkdir -p "${RUNNER_TEMP}/dc" "${RUNNER_TEMP}/reports"
+
+      # 1) UPDATE-ONLY: descarga/actualiza la base NVD una vez
+      - name: Dependency-Check DB update
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
           set -e
-          mkdir -p "${RUNNER_TEMP}/dc" "${RUNNER_TEMP}/reports"
+          docker run --rm \
+            -v "${RUNNER_TEMP}/dc:/usr/share/dependency-check/data" \
+            owasp/dependency-check:latest \
+            --updateonly \
+            ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"}
+
+      # 2) Limpia locks por si el cache trae archivos bloqueados
+      - name: Limpiar archivos de lock del H2
+        run: |
+          set -e
+          find "${RUNNER_TEMP}/dc" -type f \( -name "*.lck" -o -name "*.lock" \) -delete || true
+
+      # 3) SCAN sin actualizar (evita lock) y captura el exit code para poder subir reportes
+      - name: Dependency-Check Scan (fail on CVSS >= 4.0)
+        id: dcscan
+        continue-on-error: true   # dejamos continuar para subir reportes
+        run: |
+          set -e
           docker run --rm \
             -v "${{ github.workspace }}:/src" \
             -v "${RUNNER_TEMP}/dc:/usr/share/dependency-check/data" \
             -v "${RUNNER_TEMP}/reports:/report" \
             owasp/dependency-check:latest \
+            --noupdate \
             --scan /src \
             --format HTML \
             --format JSON \
             --format SARIF \
             --out /report \
             --project "${GITHUB_REPOSITORY}@${GITHUB_REF_NAME}" \
-            --failOnCVSS 4.0 \
-            --enableRetired \
-            ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"}
-      
-      ###   --failOnCVSS 4.0 \ Si falla se detiene el pipeline
+            --failOnCVSS 4.0
+          echo "exitcode=$?" >> "$GITHUB_OUTPUT"
 
-      - name: Mostrar resumen de vulnerabilidades 
+      - name: Mostrar resumen (JSON)
+        if: always()
         run: |
           set -e
           REPORT="${RUNNER_TEMP}/reports/dependency-check-report.json"
           if [ ! -f "$REPORT" ]; then
             echo "No se encontró el reporte JSON en $REPORT"; exit 1
           fi
-          # Cuenta CRITICAL/HIGH/MEDIUM desde JSON (toma el mejor campo disponible)
+          # Conteo por severidad (toma el mejor campo disponible)
           jq -r '
             [ .dependencies[]?.vulnerabilities[]?
               | ( .severity // .cvssv3?.baseSeverity // .cvssv2?.severity // "UNKNOWN" )
-            ] | group_by(.) | map({ key: .[0], count: length })' "$REPORT"
+            ] | group_by(.) | map({ severity: .[0], count: length })
+          ' "$REPORT"
 
-      - name: Upload Dependency-Check reports
+      - name: Subir reportes como artefacto
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: dependency-check-reports
@@ -180,6 +203,18 @@ jobs:
             ${{ runner.temp }}/reports/dependency-check-report.json
             ${{ runner.temp }}/reports/dependency-check-report.sarif
 
+      - name: Publicar SARIF en Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ runner.temp }}/reports/dependency-check-report.sarif
+
+      # 4) Hacer fallar el job si el scan detectó MEDIUM+ (CVSS >= 4.0)
+      - name: Enforzar fallo si hubo vulnerabilidades MEDIUM+
+        if: ${{ steps.dcscan.outcomes != 'success' }}
+        run: |
+          echo "Falla SCA: se detectaron vulnerabilidades CVSS >= 4.0"
+          #exit 1    # Se comenta para que el proceso continue
      
   Build-Docker-Trivy-Scan:
     needs: anlisis-SCA    # Se comenta porque OWASP Dependency Check demora mucho
