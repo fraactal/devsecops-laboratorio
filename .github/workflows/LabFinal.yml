@@ -224,6 +224,54 @@ jobs:
         run: docker images | head -n 20
 
 
+# === 5) Trivy Image Scan ===
+  Image-Security-Trivy:
+    needs: Build-Docker-Image
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_NAME: reddit-clone
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Trivy DB
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ runner.os }}
+          restore-keys: |
+            trivy-db-
+
+      - name: Trivy scan (fail on Medium/High/Critical)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          format: sarif
+          output: trivy-image.sarif
+          vuln-type: 'os,library'
+          severity: 'MEDIUM,HIGH,CRITICAL'
+          ignore-unfixed: false
+          exit-code: '1'               # BLOQUEA si hay Medium/high/critical
+
+      - name: Trivy table report
+        if: always()
+        run: |
+          trivy image --severity MEDIUM,HIGH,CRITICAL \
+            --vuln-type os,library \
+            --ignore-unfixed=false \
+            --format table \
+            ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} | tee trivy-image.txt
+
+      - name: Upload Trivy reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-image-reports-${{ github.sha }}
+          path: |
+            trivy-image.sarif
+            trivy-image.txt
+
+
 
 #  Image-Security:
 #    runs-on : ubuntu-latest
