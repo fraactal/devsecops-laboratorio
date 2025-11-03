@@ -117,10 +117,13 @@ jobs:
             echo "SAST OK: Sin vulnerabilidades Crit/Alta/Media abiertas."
           fi
 
-  # === SCA (OWASP Dependency-Check) ===
+# === SCA (OWASP Dependency-Check) ===
   anlisis-SCA:
     needs: anlisis-SAST
     runs-on: ubuntu-latest
+    env:
+      DC_DATA_DIR: ${{ runner.temp }}/dc
+      DC_REPORT_DIR: ${{ runner.temp }}/reports
 
     steps:
       - name: Checkout
@@ -128,62 +131,35 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Cachea la DB de Dependency-Check para no bajar todo cada vez
       - name: Cache Dependency-Check DB
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/dc
+          path: ${{ env.DC_DATA_DIR }}
           key: dc-cache-${{ runner.os }}-v1
 
       - name: Preparar carpetas
         run: |
           set -e
-          export DC_DIR="${RUNNER_TEMP}/dc"
-          export REPORT_DIR="${RUNNER_TEMP}/reports"
-          mkdir -p "$DC_DIR" "$REPORT_DIR"
+          mkdir -p "${DC_DATA_DIR}" "${DC_REPORT_DIR}"
 
-      # Update con limpieza de locks + retry y reset de DB si falla
-      - name: Dependency-Check DB update (con retry y cleanup)
+      # Un solo run: actualiza si hace falta y escanea
+      - name: Run OWASP Dependency-Check (update+scan, fail CVSS>=4.0)
+        id: dcscan
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        run: |
-          set -e
-          DC_DIR="${RUNNER_TEMP}/dc"
-          clean_locks() { find "$DC_DIR" -type f \( -name "*.lck" -o -name "*.lock" \) -delete || true; }
-          update_once() {
-            docker run --rm \
-              -v "${DC_DIR}:/usr/share/dependency-check/data" \
-              owasp/dependency-check:9.0.10 \
-              --updateonly \
-              ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"}
-          }
-
-          echo "Eliminando locks antes del update..."
-          clean_locks
-          set +e
-          update_once
-          RC=$?
-          set -e
-          if [ $RC -ne 0 ]; then
-            echo "Update falló (rc=$RC). Reseteando DB cacheada y reintentando..."
-            rm -rf "${DC_DIR:?}/"* || true
-            mkdir -p "$DC_DIR"
-            clean_locks
-            update_once
-          fi
-          echo "Update OK"
-
-      # Scan sin update; capturamos el exit code para política de CVSS
-      - name: Dependency-Check Scan (fail on CVSS >= 4.0)
-        id: dcscan
+        # Si quieres que este paso NO corte el job para poder subir reportes, deja continue-on-error: true
         continue-on-error: true
         run: |
-          set +e
+          set -e
+          # Limpia posibles locks viejos
+          find "${DC_DATA_DIR}" -type f \( -name "*.lck" -o -name "*.lock" \) -delete || true
+
           docker run --rm \
             -v "${{ github.workspace }}:/src" \
-            -v "${RUNNER_TEMP}/dc:/usr/share/dependency-check/data" \
-            -v "${RUNNER_TEMP}/reports:/report" \
+            -v "${DC_DATA_DIR}:/usr/share/dependency-check/data" \
+            -v "${DC_REPORT_DIR}:/report" \
             owasp/dependency-check:9.0.10 \
-            --noupdate \
             --scan /src \
             --format HTML \
             --format JSON \
@@ -191,65 +167,28 @@ jobs:
             --out /report \
             --project "${GITHUB_REPOSITORY}@${GITHUB_REF_NAME}" \
             --failOnCVSS 4.0 \
+            ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"} \
             --log /report/dc.log
-          RC=$?
-          echo "exitcode=$RC" >> "$GITHUB_OUTPUT"
-          echo "RC=$RC"
-          echo "Contenido de /report tras primer scan:"
-          ls -la "${RUNNER_TEMP}/reports" || true
-          set -e
 
-      # Fallback: si no hay reportes, reintenta sin bloquear para generarlos
-      - name: Reintentar scan para generar reportes (fallback)
-        if: always()
-        run: |
-          set -e
-          REPORT_JSON="${RUNNER_TEMP}/reports/dependency-check-report.json"
-          if [ -f "$REPORT_JSON" ]; then
-            echo "Ya existe $REPORT_JSON. Omitiendo fallback."
-            exit 0
-          fi
-          echo "No se generaron reportes; reintentando scan sin bloqueo..."
-          docker run --rm \
-            -v "${{ github.workspace }}:/src" \
-            -v "${RUNNER_TEMP}/dc:/usr/share/dependency-check/data" \
-            -v "${RUNNER_TEMP}/reports:/report" \
-            owasp/dependency-check:9.0.10 \
-            --noupdate \
-            --scan /src \
-            --format HTML \
-            --format JSON \
-            --format SARIF \
-            --out /report \
-            --project "${GITHUB_REPOSITORY}@${GITHUB_REF_NAME}" \
-            --failOnCVSS 11 \
-            --log /report/dc.log
-          echo "Contenido de /report tras fallback:"
-          ls -la "${RUNNER_TEMP}/reports" || true
-
-      - name: Chequear reportes generados
-        id: dcreports
-        run: |
-          JSON="${RUNNER_TEMP}/reports/dependency-check-report.json"
-          SARIF="${RUNNER_TEMP}/reports/dependency-check-report.sarif"
-          HTML="${RUNNER_TEMP}/reports/dependency-check-report.html"
-          test -f "$JSON"  && echo "json_exists=true"  >> "$GITHUB_OUTPUT" || echo "json_exists=false"  >> "$GITHUB_OUTPUT"
-          test -f "$SARIF" && echo "sarif_exists=true" >> "$GITHUB_OUTPUT" || echo "sarif_exists=false" >> "$GITHUB_OUTPUT"
-          echo "sarif_path=$SARIF" >> "$GITHUB_OUTPUT"
-          echo "json_path=$JSON"   >> "$GITHUB_OUTPUT"
-          echo "html_path=$HTML"   >> "$GITHUB_OUTPUT"
+          echo "exitcode=$?" >> "$GITHUB_OUTPUT"
+          echo "Contenido de reportes:"
+          ls -la "${DC_REPORT_DIR}" || true
 
       - name: Mostrar resumen (si existe JSON)
-        if: always() && steps.dcreports.outputs.json_exists == 'true'
+        if: always()
         run: |
-          REPORT="${{ steps.dcreports.outputs.json_path }}"
-          jq -r '
-            [ .dependencies[]?.vulnerabilities[]?
-              | ( .severity // .cvssv3?.baseSeverity // .cvssv2?.severity // "UNKNOWN" )
-            ] | group_by(.) | map({ severity: .[0], count: length })
-          ' "$REPORT"
+          REPORT="${{ env.DC_REPORT_DIR }}/dependency-check-report.json"
+          if [ -f "$REPORT" ]; then
+            jq -r '
+              [ .dependencies[]?.vulnerabilities[]?
+                | ( .severity // .cvssv3?.baseSeverity // .cvssv2?.severity // "UNKNOWN" )
+              ] | group_by(.) | map({ severity: .[0], count: length })
+            ' "$REPORT"
+          else
+            echo "No se encontró $REPORT"
+          fi
           echo "Log de DC (si existe):"
-          test -f "${RUNNER_TEMP}/reports/dc.log" && tail -n 200 "${RUNNER_TEMP}/reports/dc.log" || echo "Sin dc.log"
+          test -f "${{ env.DC_REPORT_DIR }}/dc.log" && tail -n 200 "${{ env.DC_REPORT_DIR }}/dc.log" || echo "Sin dc.log"
 
       - name: Subir reportes como artefacto
         if: always()
@@ -257,113 +196,113 @@ jobs:
         with:
           name: dependency-check-reports
           path: |
-            ${{ runner.temp }}/reports/dependency-check-report.html
-            ${{ runner.temp }}/reports/dependency-check-report.json
-            ${{ runner.temp }}/reports/dependency-check-report.sarif
-            ${{ runner.temp }}/reports/dc.log
+            ${{ env.DC_REPORT_DIR }}/dependency-check-report.html
+            ${{ env.DC_REPORT_DIR }}/dependency-check-report.json
+            ${{ env.DC_REPORT_DIR }}/dependency-check-report.sarif
+            ${{ env.DC_REPORT_DIR }}/dc.log
 
       - name: Publicar SARIF en Code Scanning
-        if: always() && steps.dcreports.outputs.sarif_exists == 'true'
+        if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: ${{ steps.dcreports.outputs.sarif_path }}
+          sarif_file: ${{ env.DC_REPORT_DIR }}/dependency-check-report.sarif
 
-      # Enforce: si el primer scan falló por CVSS >= 4.0, exit 1 (descomenta para bloquear)
+      # Enforce: si quieres BLOQUEAR el job cuando hallan MEDIUM+ descomenta el exit 1
       - name: Enforzar fallo si hubo vulnerabilidades MEDIUM+
-        if: ${{ steps.dcscan.outputs.exitcode && steps.dcscan.outputs.exitcode != '0' }}
+        if: ${{ steps.dcscan.outcomes != '' && steps.dcscan.outcome == 'failure' }}
         run: |
           echo "Falla SCA: se detectaron vulnerabilidades CVSS >= 4.0"
-          # exit 1  # <- quita el comentario si quieres bloquear el pipeline
+          # exit 1
 
-     
-  Build-Docker-Trivy-Scan:
-    needs: anlisis-SCA    # Se comenta porque OWASP Dependency Check demora mucho
-    #needs: anlisis-SAST    
-    runs-on: ubuntu-latest
-    env:
-      IMAGE_NAME: reddit-clone
-      IMAGE_TAG: ${{ github.sha }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      
+    Build-Docker-Trivy-Scan:
+      needs: anlisis-SCA    # Se comenta porque OWASP Dependency Check demora mucho
+      #needs: anlisis-SAST    
+      runs-on: ubuntu-latest
+      env:
+        IMAGE_NAME: reddit-clone
+        IMAGE_TAG: ${{ github.sha }}
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        - name: Set up Docker Buildx
+          uses: docker/setup-buildx-action@v3
 
-      - name: Cache Docker layers
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: buildx-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            buildx-${{ runner.os }}-
+        - name: Cache Docker layers
+          uses: actions/cache@v4
+          with:
+            path: /tmp/.buildx-cache
+            key: buildx-${{ runner.os }}-${{ github.sha }}
+            restore-keys: |
+              buildx-${{ runner.os }}-
 
-      - name: Build image (local)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          load: true        # no publica, carga en daemon local
-          tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache-new
+        - name: Build image (local)
+          uses: docker/build-push-action@v6
+          with:
+            context: .
+            file: ./Dockerfile
+            load: true        # no publica, carga en daemon local
+            tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+            cache-from: type=local,src=/tmp/.buildx-cache
+            cache-to: type=local,dest=/tmp/.buildx-cache-new
 
-      - name: Move build cache
-        run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+        - name: Move build cache
+          run: |
+            rm -rf /tmp/.buildx-cache
+            mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
-      - name: Mostrar imágenes locales
-        run: |
-          echo "Listado de imágenes locales:"
-          docker images | head -n 20
+        - name: Mostrar imágenes locales
+          run: |
+            echo "Listado de imágenes locales:"
+            docker images | head -n 20
 
-      # Image Security Scan con Trivy 
-      - name: Cache Trivy DB
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/trivy
-          key: trivy-db-${{ runner.os }}
-          restore-keys: |
-            trivy-db-
+        # Image Security Scan con Trivy 
+        - name: Cache Trivy DB
+          uses: actions/cache@v4
+          with:
+            path: ~/.cache/trivy
+            key: trivy-db-${{ runner.os }}
+            restore-keys: |
+              trivy-db-
 
-      - name: Ejecutar Trivy 
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          format: sarif
-          output: trivy-image.sarif
-          vuln-type: 'os,library'
-          severity: 'MEDIUM,HIGH,CRITICAL'
-          ignore-unfixed: false
-          exit-code: '1'              # <- falla el job si hay Medium
+        - name: Ejecutar Trivy 
+          uses: aquasecurity/trivy-action@0.24.0
+          with:
+            image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+            format: sarif
+            output: trivy-image.sarif
+            vuln-type: 'os,library'
+            severity: 'MEDIUM,HIGH,CRITICAL'
+            ignore-unfixed: false
+            exit-code: '1'              # <- falla el job si hay Medium
 
 
-      - name: Publicar SARIF en Code Scanning
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-image.sarif
+        - name: Publicar SARIF en Code Scanning
+          if: always()
+          uses: github/codeql-action/upload-sarif@v3
+          with:
+            sarif_file: trivy-image.sarif
 
-      - name: Generar reporte tabular de Trivy
-        if: always()
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          format: table
-          output: trivy-image.txt
-          vuln-type: 'os,library'
-          severity: 'MEDIUM,HIGH,CRITICAL'
-          ignore-unfixed: false
+        - name: Generar reporte tabular de Trivy
+          if: always()
+          uses: aquasecurity/trivy-action@0.24.0
+          with:
+            image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+            format: table
+            output: trivy-image.txt
+            vuln-type: 'os,library'
+            severity: 'MEDIUM,HIGH,CRITICAL'
+            ignore-unfixed: false
 
-      - name: Subir reportes de Trivy
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-image-reports-${{ github.sha }}
-          path: |
-            trivy-image.sarif
-            trivy-image.txt
+        - name: Subir reportes de Trivy
+          if: always()
+          uses: actions/upload-artifact@v4
+          with:
+            name: trivy-image-reports-${{ github.sha }}
+            path: |
+              trivy-image.sarif
+              trivy-image.txt
 
 
 
