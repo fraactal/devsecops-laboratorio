@@ -240,12 +240,30 @@ jobs:
         uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          format: 'table,sarif'                  # genera ambos reportes
-          output: 'trivy-image.txt,trivy-image.sarif'
+          format: sarif
+          output: trivy-image.sarif
           vuln-type: 'os,library'
           severity: 'MEDIUM,HIGH,CRITICAL'
           ignore-unfixed: false
-          exit-code: '1'                         # BLOQUEA el pipeline si hay Medium+
+          exit-code: '1'              # <- falla el job si hay Medium
+
+
+      - name: Publicar SARIF en Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+
+      - name: Generar reporte tabular de Trivy
+        if: always()
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          format: table
+          output: trivy-image.txt
+          vuln-type: 'os,library'
+          severity: 'MEDIUM,HIGH,CRITICAL'
+          ignore-unfixed: false
 
       - name: Subir reportes de Trivy
         if: always()
@@ -255,13 +273,6 @@ jobs:
           path: |
             trivy-image.sarif
             trivy-image.txt
-      
-      - name: Publicar SARIF en Code Scanning
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-image.sarif
-
 
 
 
