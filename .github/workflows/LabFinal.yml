@@ -215,94 +215,94 @@ jobs:
           # exit 1
 
       
-    Build-Docker-Trivy-Scan:
-      needs: anlisis-SCA    # Se comenta porque OWASP Dependency Check demora mucho
-      #needs: anlisis-SAST    
-      runs-on: ubuntu-latest
-      env:
-        IMAGE_NAME: reddit-clone
-        IMAGE_TAG: ${{ github.sha }}
-      steps:
-        - name: Checkout
-          uses: actions/checkout@v4
+  Build-Docker-Trivy-Scan:
+    needs: anlisis-SCA    # Se comenta porque OWASP Dependency Check demora mucho
+    #needs: anlisis-SAST    
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_NAME: reddit-clone
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-        - name: Set up Docker Buildx
-          uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-        - name: Cache Docker layers
-          uses: actions/cache@v4
-          with:
-            path: /tmp/.buildx-cache
-            key: buildx-${{ runner.os }}-${{ github.sha }}
-            restore-keys: |
-              buildx-${{ runner.os }}-
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: buildx-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            buildx-${{ runner.os }}-
 
-        - name: Build image (local)
-          uses: docker/build-push-action@v6
-          with:
-            context: .
-            file: ./Dockerfile
-            load: true        # no publica, carga en daemon local
-            tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-            cache-from: type=local,src=/tmp/.buildx-cache
-            cache-to: type=local,dest=/tmp/.buildx-cache-new
+      - name: Build image (local)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true        # no publica, carga en daemon local
+          tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new
 
-        - name: Move build cache
-          run: |
-            rm -rf /tmp/.buildx-cache
-            mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+      - name: Move build cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
-        - name: Mostrar imágenes locales
-          run: |
-            echo "Listado de imágenes locales:"
-            docker images | head -n 20
+      - name: Mostrar imágenes locales
+        run: |
+          echo "Listado de imágenes locales:"
+          docker images | head -n 20
 
-        # Image Security Scan con Trivy 
-        - name: Cache Trivy DB
-          uses: actions/cache@v4
-          with:
-            path: ~/.cache/trivy
-            key: trivy-db-${{ runner.os }}
-            restore-keys: |
-              trivy-db-
+      # Image Security Scan con Trivy 
+      - name: Cache Trivy DB
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ runner.os }}
+          restore-keys: |
+            trivy-db-
 
-        - name: Ejecutar Trivy 
-          uses: aquasecurity/trivy-action@0.24.0
-          with:
-            image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-            format: sarif
-            output: trivy-image.sarif
-            vuln-type: 'os,library'
-            severity: 'MEDIUM,HIGH,CRITICAL'
-            ignore-unfixed: false
-            exit-code: '1'              # <- falla el job si hay Medium
+      - name: Ejecutar Trivy 
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          format: sarif
+          output: trivy-image.sarif
+          vuln-type: 'os,library'
+          severity: 'MEDIUM,HIGH,CRITICAL'
+          ignore-unfixed: false
+          exit-code: '1'              # <- falla el job si hay Medium
 
 
-        - name: Publicar SARIF en Code Scanning
-          if: always()
-          uses: github/codeql-action/upload-sarif@v3
-          with:
-            sarif_file: trivy-image.sarif
+      - name: Publicar SARIF en Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
 
-        - name: Generar reporte tabular de Trivy
-          if: always()
-          uses: aquasecurity/trivy-action@0.24.0
-          with:
-            image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-            format: table
-            output: trivy-image.txt
-            vuln-type: 'os,library'
-            severity: 'MEDIUM,HIGH,CRITICAL'
-            ignore-unfixed: false
+      - name: Generar reporte tabular de Trivy
+        if: always()
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          format: table
+          output: trivy-image.txt
+          vuln-type: 'os,library'
+          severity: 'MEDIUM,HIGH,CRITICAL'
+          ignore-unfixed: false
 
-        - name: Subir reportes de Trivy
-          if: always()
-          uses: actions/upload-artifact@v4
-          with:
-            name: trivy-image-reports-${{ github.sha }}
-            path: |
-              trivy-image.sarif
-              trivy-image.txt
+      - name: Subir reportes de Trivy
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-image-reports-${{ github.sha }}
+          path: |
+            trivy-image.sarif
+            trivy-image.txt
 
 
 
