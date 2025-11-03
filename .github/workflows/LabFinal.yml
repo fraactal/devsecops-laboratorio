@@ -117,7 +117,7 @@ jobs:
             echo "SAST OK: Sin vulnerabilidades Crit/Alta/Media abiertas."
           fi
 
-# === SCA (OWASP Dependency-Check) ===
+  # === SCA (OWASP Dependency-Check) ===
   anlisis-SCA:
     needs: anlisis-SAST
     runs-on: ubuntu-latest
@@ -154,7 +154,6 @@ jobs:
               -v "${DC_DIR}:/usr/share/dependency-check/data" \
               owasp/dependency-check:9.0.10 \
               --updateonly \
-              --disableVersionCheck \
               ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"}
           }
 
@@ -192,7 +191,6 @@ jobs:
             --out /report \
             --project "${GITHUB_REPOSITORY}@${GITHUB_REF_NAME}" \
             --failOnCVSS 4.0 \
-            --disableVersionCheck \
             --log /report/dc.log
           RC=$?
           echo "exitcode=$RC" >> "$GITHUB_OUTPUT"
@@ -208,7 +206,7 @@ jobs:
           set -e
           REPORT_JSON="${RUNNER_TEMP}/reports/dependency-check-report.json"
           if [ -f "$REPORT_JSON" ]; then
-            echo "ℹYa existe $REPORT_JSON. Omitiendo fallback."
+            echo "Ya existe $REPORT_JSON. Omitiendo fallback."
             exit 0
           fi
           echo "No se generaron reportes; reintentando scan sin bloqueo..."
@@ -225,12 +223,10 @@ jobs:
             --out /report \
             --project "${GITHUB_REPOSITORY}@${GITHUB_REF_NAME}" \
             --failOnCVSS 11 \
-            --disableVersionCheck \
             --log /report/dc.log
           echo "Contenido de /report tras fallback:"
           ls -la "${RUNNER_TEMP}/reports" || true
 
-      # Exponer como outputs si existen los reportes
       - name: Chequear reportes generados
         id: dcreports
         run: |
