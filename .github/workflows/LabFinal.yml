@@ -178,13 +178,6 @@ jobs:
             ${{ runner.temp }}/reports/dependency-check-report.json
             ${{ runner.temp }}/reports/dependency-check-report.sarif
 
-      # (Opcional) Subir SARIF a Code Scanning
-      - name: Upload SARIF to Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: ${{ runner.temp }}/reports/dependency-check-report.sarif
-
-
 
           
 #  Build-Docker:
