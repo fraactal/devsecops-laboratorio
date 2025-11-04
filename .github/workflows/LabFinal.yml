@@ -117,135 +117,91 @@ jobs:
             echo "SAST OK: Sin vulnerabilidades Crit/Alta/Media abiertas."
           fi
 
-# === SCA (OWASP Dependency-Check) ===
-  anlisis-SCA:
+# === SCA con Snyk (Open Source & Container) ===
+  anlisis-SCA-Snyk:
     needs: anlisis-SAST
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: read
+      security-events: write   # para subir SARIF a Code Scanning
+    env:
+      IMAGE_NAME: reddit-clone
+      IMAGE_TAG: ${{ github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Exporta rutas basadas en RUNNER_TEMP para usarlas en todo el job
-      - name: Definir rutas SCA
-        run: |
-          echo "DC_DATA_DIR=$RUNNER_TEMP/dc" >> "$GITHUB_ENV"
-          echo "DC_REPORT_DIR=$RUNNER_TEMP/reports" >> "$GITHUB_ENV"
+      # (Opcional) Instalar deps si tu ecosistema lo requiere para que Snyk lea el lockfile
+      # - name: Setup Node & install (opcional)
+      #   uses: actions/setup-node@v4
+      #   with:
+      #     node-version: '20'
+      #   # Si necesitas: npm ci
 
-      - name: Preparar carpetas
-        run: |
-          mkdir -p "${DC_DATA_DIR}" "${DC_REPORT_DIR}"
-
-      # 1) Update de la DB con retry y purge si es necesario
-      - name: Dependency-Check DB update (retry + purge si falla)
-        id: dcupdate
+      # ---------- Snyk Open Source (SCA de dependencias) ----------
+      - name: Snyk Open Source - test (SCA)
+        uses: snyk/actions/node@v0.4.0
         env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        continue-on-error: true
-        run: |
-          set -e
-          # limpia locks viejos
-          find "${DC_DATA_DIR}" -type f \( -name "*.lck" -o -name "*.lock" \) -delete || true
-
-          update_once () {
-            docker run --rm \
-              -v "${DC_DATA_DIR}:/usr/share/dependency-check/data" \
-              -v "${DC_REPORT_DIR}:/report" \
-              owasp/dependency-check:9.0.10 \
-              --updateonly \
-              ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"} \
-              --log /report/dc-update.log
-          }
-
-          echo ">> Intento 1 de update"
-          set +e; update_once; RC=$?; set -e
-          if [ $RC -ne 0 ]; then
-            echo "Update falló (rc=$RC). Purge de la cache y reintento..."
-            docker run --rm \
-              -v "${DC_DATA_DIR}:/usr/share/dependency-check/data" \
-              -v "${DC_REPORT_DIR}:/report" \
-              owasp/dependency-check:9.0.10 \
-              --purge \
-              --log /report/dc-purge.log || true
-
-            # segunda pasada de update tras purge
-            set +e; update_once; RC=$?; set -e
-          fi
-
-          echo "update_rc=$RC" >> "$GITHUB_OUTPUT"
-          echo "Contenido DC_DATA_DIR:"
-          ls -la "${DC_DATA_DIR}" || true
-
-      # 2) Scan sin update; si la DB no está, saldrá con error y lo veremos en logs
-      - name: Dependency-Check Scan (fail on CVSS >= 4.0)
-        id: dcscan
-        continue-on-error: true
-        run: |
-          set -e
-          docker run --rm \
-            -v "${{ github.workspace }}:/src" \
-            -v "${DC_DATA_DIR}:/usr/share/dependency-check/data" \
-            -v "${DC_REPORT_DIR}:/report" \
-            owasp/dependency-check:9.0.10 \
-            --noupdate \
-            --scan /src \
-            --format HTML \
-            --format JSON \
-            --format SARIF \
-            --out /report \
-            --project "${GITHUB_REPOSITORY}@${GITHUB_REF_NAME}" \
-            --failOnCVSS 4.0 \
-            --log /report/dc-scan.log
-          echo "scan_rc=$?" >> "$GITHUB_OUTPUT"
-          echo "Reportes generados:"
-          ls -la "${DC_REPORT_DIR}" || true
-
-      - name: Mostrar resumen (si existe JSON)
-        if: always()
-        run: |
-          REPORT="${DC_REPORT_DIR}/dependency-check-report.json"
-          if [ -f "$REPORT" ]; then
-            jq -r '
-              [ .dependencies[]?.vulnerabilities[]?
-                | ( .severity // .cvssv3?.baseSeverity // .cvssv2?.severity // "UNKNOWN" )
-              ] | group_by(.) | map({ severity: .[0], count: length })
-            ' "$REPORT"
-          else
-            echo "No se encontró $REPORT"
-          fi
-          echo "== Logs =="
-          for f in dc-update.log dc-purge.log dc-scan.log; do
-            test -f "${DC_REPORT_DIR}/$f" && { echo "--- $f ---"; tail -n 200 "${DC_REPORT_DIR}/$f"; } || true
-          done
-
-      - name: Subir reportes como artefacto
-        if: always()
-        uses: actions/upload-artifact@v4
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          name: dependency-check-reports
-          path: |
-            ${{ env.DC_REPORT_DIR }}/dependency-check-report.html
-            ${{ env.DC_REPORT_DIR }}/dependency-check-report.json
-            ${{ env.DC_REPORT_DIR }}/dependency-check-report.sarif
-            ${{ env.DC_REPORT_DIR }}/dc-update.log
-            ${{ env.DC_REPORT_DIR }}/dc-purge.log
-            ${{ env.DC_REPORT_DIR }}/dc-scan.log
+          # Falla si hay MEDIUM o superior y genera SARIF
+          args: >-
+            --severity-threshold=medium
+            --fail-on=all
+            --sarif-file-output=snyk-open-source.sarif
 
-      - name: Publicar SARIF en Code Scanning
+      - name: Subir SARIF Snyk Open Source
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: ${{ env.DC_REPORT_DIR }}/dependency-check-report.sarif
+          sarif_file: snyk-open-source.sarif
 
-      # Bloquear el job si el scan detectó CVSS >= 4.0
-      #- name: Enforzar fallo si hubo vulnerabilidades MEDIUM+
-      #  if: ${{ steps.dcscan.outcome == 'failure' }}
-      #  run: |
-      #    echo "Falla SCA: se detectaron vulnerabilidades CVSS >= 4.0"
-      #    # exit 1   # descomenta para bloquear
+      # ---------- Build imagen ----------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: buildx-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            buildx-${{ runner.os }}-
+
+      - name: Build image (local)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new
+
+      - name: Move build cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      # ---------- Snyk Container (escaneo de imagen Docker) ----------
+      - name: Snyk Container - test image
+        uses: snyk/actions/docker@v0.4.0
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          args: >-
+            --severity-threshold=medium
+            --file=Dockerfile
+            --sarif-file-output=snyk-container.sarif
+
+      - name: Subir SARIF Snyk Container
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk-container.sarif
 
       
   Build-Docker-Trivy-Scan:
