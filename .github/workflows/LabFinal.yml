@@ -128,40 +128,68 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Definir rutas usando RUNNER_TEMP y exportarlas a GITHUB_ENV para pasos siguientes
+      # Exporta rutas basadas en RUNNER_TEMP para usarlas en todo el job
       - name: Definir rutas SCA
         run: |
           echo "DC_DATA_DIR=$RUNNER_TEMP/dc" >> "$GITHUB_ENV"
           echo "DC_REPORT_DIR=$RUNNER_TEMP/reports" >> "$GITHUB_ENV"
 
-      # Cachea la DB de Dependency-Check
-      - name: Cache Dependency-Check DB
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.DC_DATA_DIR }}
-          key: dc-cache-${{ runner.os }}-v1
-
       - name: Preparar carpetas
         run: |
-          set -e
           mkdir -p "${DC_DATA_DIR}" "${DC_REPORT_DIR}"
 
-      # Un solo run: actualiza si hace falta y escanea
-      - name: Run OWASP Dependency-Check (update+scan, fail CVSS>=4.0)
-        id: dcscan
+      # 1) Update de la DB con retry y purge si es necesario
+      - name: Dependency-Check DB update (retry + purge si falla)
+        id: dcupdate
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        continue-on-error: true   # deja subir reportes aunque falle por CVSS
+        continue-on-error: true
         run: |
           set -e
-          # Limpia posibles locks viejos
+          # limpia locks viejos
           find "${DC_DATA_DIR}" -type f \( -name "*.lck" -o -name "*.lock" \) -delete || true
 
+          update_once () {
+            docker run --rm \
+              -v "${DC_DATA_DIR}:/usr/share/dependency-check/data" \
+              -v "${DC_REPORT_DIR}:/report" \
+              owasp/dependency-check:9.0.10 \
+              --updateonly \
+              ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"} \
+              --log /report/dc-update.log
+          }
+
+          echo ">> Intento 1 de update"
+          set +e; update_once; RC=$?; set -e
+          if [ $RC -ne 0 ]; then
+            echo "Update falló (rc=$RC). Purge de la cache y reintento..."
+            docker run --rm \
+              -v "${DC_DATA_DIR}:/usr/share/dependency-check/data" \
+              -v "${DC_REPORT_DIR}:/report" \
+              owasp/dependency-check:9.0.10 \
+              --purge \
+              --log /report/dc-purge.log || true
+
+            # segunda pasada de update tras purge
+            set +e; update_once; RC=$?; set -e
+          fi
+
+          echo "update_rc=$RC" >> "$GITHUB_OUTPUT"
+          echo "Contenido DC_DATA_DIR:"
+          ls -la "${DC_DATA_DIR}" || true
+
+      # 2) Scan sin update; si la DB no está, saldrá con error y lo veremos en logs
+      - name: Dependency-Check Scan (fail on CVSS >= 4.0)
+        id: dcscan
+        continue-on-error: true
+        run: |
+          set -e
           docker run --rm \
             -v "${{ github.workspace }}:/src" \
             -v "${DC_DATA_DIR}:/usr/share/dependency-check/data" \
             -v "${DC_REPORT_DIR}:/report" \
             owasp/dependency-check:9.0.10 \
+            --noupdate \
             --scan /src \
             --format HTML \
             --format JSON \
@@ -169,10 +197,9 @@ jobs:
             --out /report \
             --project "${GITHUB_REPOSITORY}@${GITHUB_REF_NAME}" \
             --failOnCVSS 4.0 \
-            ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"} \
-            --log /report/dc.log
-
-          echo "Contenido de reportes:"
+            --log /report/dc-scan.log
+          echo "scan_rc=$?" >> "$GITHUB_OUTPUT"
+          echo "Reportes generados:"
           ls -la "${DC_REPORT_DIR}" || true
 
       - name: Mostrar resumen (si existe JSON)
@@ -188,8 +215,10 @@ jobs:
           else
             echo "No se encontró $REPORT"
           fi
-          echo "Log de DC (si existe):"
-          test -f "${DC_REPORT_DIR}/dc.log" && tail -n 200 "${DC_REPORT_DIR}/dc.log" || echo "Sin dc.log"
+          echo "== Logs =="
+          for f in dc-update.log dc-purge.log dc-scan.log; do
+            test -f "${DC_REPORT_DIR}/$f" && { echo "--- $f ---"; tail -n 200 "${DC_REPORT_DIR}/$f"; } || true
+          done
 
       - name: Subir reportes como artefacto
         if: always()
@@ -200,7 +229,9 @@ jobs:
             ${{ env.DC_REPORT_DIR }}/dependency-check-report.html
             ${{ env.DC_REPORT_DIR }}/dependency-check-report.json
             ${{ env.DC_REPORT_DIR }}/dependency-check-report.sarif
-            ${{ env.DC_REPORT_DIR }}/dc.log
+            ${{ env.DC_REPORT_DIR }}/dc-update.log
+            ${{ env.DC_REPORT_DIR }}/dc-purge.log
+            ${{ env.DC_REPORT_DIR }}/dc-scan.log
 
       - name: Publicar SARIF en Code Scanning
         if: always()
@@ -208,12 +239,13 @@ jobs:
         with:
           sarif_file: ${{ env.DC_REPORT_DIR }}/dependency-check-report.sarif
 
-      # Opcional: bloquear job si el paso anterior falló (por CVSS >=4.0)
-      - name: Enforzar fallo si hubo vulnerabilidades MEDIUM+
-        if: ${{ steps.dcscan.outcome == 'failure' }}
-        run: |
-          echo "Falla SCA: se detectaron vulnerabilidades CVSS >= 4.0"
-          # exit 1   # ← descomenta para bloquear el job
+      # Bloquear el job si el scan detectó CVSS >= 4.0
+      #- name: Enforzar fallo si hubo vulnerabilidades MEDIUM+
+      #  if: ${{ steps.dcscan.outcome == 'failure' }}
+      #  run: |
+      #    echo "Falla SCA: se detectaron vulnerabilidades CVSS >= 4.0"
+      #    # exit 1   # descomenta para bloquear
+
 
       
   Build-Docker-Trivy-Scan:
