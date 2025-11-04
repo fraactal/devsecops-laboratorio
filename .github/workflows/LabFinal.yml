@@ -205,7 +205,7 @@ jobs:
 
       
   Build-Docker-Trivy-Scan:
-    needs: anlisis-SCA    # Se comenta porque OWASP Dependency Check demora mucho
+    needs: anlisis-SCA-Snyk    # Se comenta porque OWASP Dependency Check demora mucho
     #needs: anlisis-SAST    
     runs-on: ubuntu-latest
     env:
