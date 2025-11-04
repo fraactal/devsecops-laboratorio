@@ -117,48 +117,47 @@ jobs:
             echo "SAST OK: Sin vulnerabilidades Crit/Alta/Media abiertas."
           fi
 
-# === SCA con Snyk (Open Source & Container) ===
+  # === SCA con Snyk (Open Source) + Imagen con Snyk Container ===
   anlisis-SCA-Snyk:
     needs: anlisis-SAST
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write   # para subir SARIF a Code Scanning
+      security-events: write
     env:
       IMAGE_NAME: reddit-clone
       IMAGE_TAG: ${{ github.sha }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # (Opcional) Instalar deps si tu ecosistema lo requiere para que Snyk lea el lockfile
-      # - name: Setup Node & install (opcional)
-      #   uses: actions/setup-node@v4
-      #   with:
-      #     node-version: '20'
-      #   # Si necesitas: npm ci
-
-      # ---------- Snyk Open Source (SCA de dependencias) ----------
-      - name: Snyk Open Source - test (SCA)
-        uses: snyk/actions/node@v0.4.0
+      # ---------- Snyk Open Source (SCA de dependencias del repo) ----------
+      - name: Snyk Open Source - test (SCA) y SARIF
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          # Falla si hay MEDIUM o superior y genera SARIF
-          args: >-
-            --severity-threshold=medium
-            --fail-on=all
-            --sarif-file-output=snyk-open-source.sarif
+        run: |
+          set -e
+          # SCA: falla si hay vulnerabilidades Medium+ y genera SARIF
+          docker run --rm \
+            -e SNYK_TOKEN \
+            -v "$PWD":/app -w /app \
+            snyk/snyk:docker \
+            snyk test \
+              --severity-threshold=medium \
+              --fail-on=all \
+              --sarif-file-output=snyk-open-source.sarif
+          ls -l snyk-open-source*.sarif || true
 
-      - name: Subir SARIF Snyk Open Source
+      - name: Subir SARIF Snyk Open Source a Code Scanning
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: snyk-open-source.sarif
 
-      # ---------- Build imagen ----------
+      # ---------- Build imagen local ----------
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -185,23 +184,44 @@ jobs:
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
-      # ---------- Snyk Container (escaneo de imagen Docker) ----------
-      - name: Snyk Container - test image
-        uses: snyk/actions/docker@v0.4.0
+      - name: Mostrar imágenes locales
+        run: |
+          echo "Listado de imágenes locales:"
+          docker images | head -n 20
+
+      # ---------- Snyk Container (escaneo de imagen Docker local) ----------
+      - name: Snyk Container - test image (falla con Medium+ y SARIF)
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          image: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          args: >-
-            --severity-threshold=medium
-            --file=Dockerfile
-            --sarif-file-output=snyk-container.sarif
+        run: |
+          set -e
+          # Montamos el socket para que el contenedor de Snyk vea la imagen local
+          docker run --rm \
+            -e SNYK_TOKEN \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD":/work -w /work \
+            snyk/snyk:docker \
+            snyk container test ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} \
+              --file=./Dockerfile \
+              --severity-threshold=medium \
+              --sarif-file-output=snyk-container.sarif
+          ls -l snyk-container*.sarif || true
 
-      - name: Subir SARIF Snyk Container
+      - name: Subir SARIF Snyk Container a Code Scanning
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: snyk-container.sarif
+
+      # (Opcional) subir los SARIF también como artefactos
+      - name: Subir reportes Snyk como artefactos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-reports-${{ github.sha }}
+          path: |
+            snyk-open-source.sarif
+            snyk-container.sarif
 
       
   Build-Docker-Trivy-Scan:
