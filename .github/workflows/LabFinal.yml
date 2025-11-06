@@ -117,16 +117,13 @@ jobs:
             echo "SAST OK: Sin vulnerabilidades Crit/Alta/Media abiertas."
           fi
 
-  # === SCA con Snyk (Open Source) + Imagen con Snyk Container ===
+  # === SCA con Snyk (Open Source) ===
   anlisis-SCA-Snyk:
     needs: anlisis-SAST
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write
-    env:
-      IMAGE_NAME: reddit-clone
-      IMAGE_TAG: ${{ github.sha }}
+      security-events: write   # necesario para subir SARIF a Code Scanning
 
     steps:
       - name: Checkout
@@ -134,94 +131,64 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ---------- Snyk Open Source (SCA de dependencias del repo) ----------
-      - name: Snyk Open Source - test (SCA) y SARIF
+      # ---------- Validar token ----------
+      - name: Validar SNYK_TOKEN
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
+          if [ -z "${SNYK_TOKEN}" ]; then
+            echo "❌ Falta el secreto SNYK_TOKEN en GitHub Secrets."
+            exit 1
+          fi
+          echo "✅ SNYK_TOKEN presente (oculto)."
+
+      # ---------- (Opcional) Instalar dependencias ----------
+      # Si tu proyecto usa Node:
+      # - name: Setup Node & install
+      #   uses: actions/setup-node@v4
+      #   with:
+      #     node-version: '20'
+      #   run: npm ci
+
+      # ---------- Snyk Open Source (SCA del repositorio) ----------
+      - name: Snyk Open Source - test (SCA)
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_ORG: ${{ secrets.SNYK_ORG }} # opcional
+        # Si quieres que el job continúe aunque falle el escaneo, agrega: continue-on-error: true
+        run: |
           set -e
-          # SCA: falla si hay vulnerabilidades Medium+ y genera SARIF
           docker run --rm \
             -e SNYK_TOKEN \
+            -e SNYK_ORG \
             -v "$PWD":/app -w /app \
             snyk/snyk:docker \
-            snyk test \
-              --severity-threshold=medium \
-              --fail-on=all \
-              --sarif-file-output=snyk-open-source.sarif
+            sh -lc '
+              snyk auth "$SNYK_TOKEN" >/dev/null &&
+              snyk test \
+                ${SNYK_ORG:+--org="$SNYK_ORG"} \
+                --severity-threshold=medium \
+                --fail-on=all \
+                --sarif-file-output=snyk-open-source.sarif
+            '
+          echo "✅ Escaneo Snyk finalizado. Reporte generado:"
           ls -l snyk-open-source*.sarif || true
 
+      # ---------- Publicar el resultado en GitHub Security ----------
       - name: Subir SARIF Snyk Open Source a Code Scanning
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: snyk-open-source.sarif
 
-      # ---------- Build imagen local ----------
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Cache Docker layers
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: buildx-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            buildx-${{ runner.os }}-
-
-      - name: Build image (local)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          load: true
-          tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache-new
-
-      - name: Move build cache
-        run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
-
-      - name: Mostrar imágenes locales
-        run: |
-          echo "Listado de imágenes locales:"
-          docker images | head -n 20
-
-      # ---------- Snyk Container (escaneo de imagen Docker local) ----------
-      - name: Snyk Container - test image (falla con Medium+ y SARIF)
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: |
-          set -e
-          # Montamos el socket para que el contenedor de Snyk vea la imagen local
-          docker run --rm \
-            -e SNYK_TOKEN \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "$PWD":/work -w /work \
-            snyk/snyk:docker \
-            snyk container test ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} \
-              --file=./Dockerfile \
-              --severity-threshold=medium \
-              --sarif-file-output=snyk-container.sarif
-          ls -l snyk-container*.sarif || true
-
-      - name: Subir SARIF Snyk Container a Code Scanning
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: snyk-container.sarif
-
-      # (Opcional) subir los SARIF también como artefactos
-      - name: Subir reportes Snyk como artefactos
+      # ---------- (Opcional) Guardar reporte como artefacto ----------
+      - name: Subir reporte Snyk como artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: snyk-reports-${{ github.sha }}
-          path: |
-            snyk-open-source.sarif
-            snyk-container.sarif
+          name: snyk-sca-report-${{ github.sha }}
+          path: snyk-open-source.sarif
+
 
       
   Build-Docker-Trivy-Scan:
