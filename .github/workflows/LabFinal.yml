@@ -117,40 +117,38 @@ jobs:
             echo "SAST OK: Sin vulnerabilidades Crit/Alta/Media abiertas."
           fi
 
-# === SCA con Snyk (Open Source) ===
+# === SCA con Snyk (Open Source) 
   anlisis-SCA-Snyk:
     needs: anlisis-SAST
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write   # para subir SARIF a Code Scanning
+      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Escaneo SCA con Snyk (Node/monorepo soportado)
-      - name: Snyk Open Source - test (SCA)
+      # Escaneo Snyk (SCA)
+      - name: Snyk Open Source - test
         uses: snyk/actions/node@master
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        continue-on-error: true  # esto permite que el pipeline siga aunque haya vulnerabilidades
         with:
-          # Opcional: si tu proyecto tiene varias manifets/lockfiles
-          # command: monitor            
           args: >-
             --all-projects
             --severity-threshold=medium
-            --fail-on=none
             --sarif-file-output=snyk-open-source.sarif
 
       - name: Subir SARIF a Code Scanning
-        if: always()
+        if: always() && hashFiles('snyk-open-source.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: snyk-open-source.sarif
 
-      - name: Guardar reporte SARIF como artefacto
+      - name: Subir reporte como artefacto
         if: always()
         uses: actions/upload-artifact@v4
         with:
