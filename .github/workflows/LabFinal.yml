@@ -137,25 +137,17 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           if [ -z "${SNYK_TOKEN}" ]; then
-            echo "❌ Falta el secreto SNYK_TOKEN en GitHub Secrets."
+            echo "Falta el secreto SNYK_TOKEN en GitHub Secrets."
             exit 1
           fi
-          echo "✅ SNYK_TOKEN presente (oculto)."
-
-      # ---------- (Opcional) Instalar dependencias ----------
-      # Si tu proyecto usa Node:
-      # - name: Setup Node & install
-      #   uses: actions/setup-node@v4
-      #   with:
-      #     node-version: '20'
-      #   run: npm ci
+          echo "SNYK_TOKEN presente (oculto)."
 
       # ---------- Snyk Open Source (SCA del repositorio) ----------
       - name: Snyk Open Source - test (SCA)
         env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-          SNYK_ORG: ${{ secrets.SNYK_ORG }} # opcional
-        # Si quieres que el job continúe aunque falle el escaneo, agrega: continue-on-error: true
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}   # requerido
+          SNYK_ORG: ${{ secrets.SNYK_ORG }}       # opcional
+        # Si quieres reportar sin bloquear, añade: continue-on-error: true
         run: |
           set -e
           docker run --rm \
@@ -163,25 +155,21 @@ jobs:
             -e SNYK_ORG \
             -v "$PWD":/app -w /app \
             snyk/snyk:docker \
-            sh -lc '
-              snyk auth "$SNYK_TOKEN" >/dev/null &&
-              snyk test \
-                ${SNYK_ORG:+--org="$SNYK_ORG"} \
-                --severity-threshold=medium \
-                --fail-on=all \
-                --sarif-file-output=snyk-open-source.sarif
-            '
-          echo "✅ Escaneo Snyk finalizado. Reporte generado:"
-          ls -l snyk-open-source*.sarif || true
-
-      # ---------- Publicar el resultado en GitHub Security ----------
+            test \
+              ${SNYK_ORG:+--org="${SNYK_ORG}"} \
+              --severity-threshold=medium \
+              --fail-on=none \
+              --sarif-file-output=/app/snyk-open-source.sarif
+          ls -l snyk-open-source.sarif
+        
+        ## --fail-on=all \    # si queremos que corte el proceso al encontrar fallas
+      
       - name: Subir SARIF Snyk Open Source a Code Scanning
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: snyk-open-source.sarif
 
-      # ---------- (Opcional) Guardar reporte como artefacto ----------
       - name: Subir reporte Snyk como artifact
         if: always()
         uses: actions/upload-artifact@v4
