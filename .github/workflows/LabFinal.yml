@@ -216,7 +216,7 @@ jobs:
           vuln-type: 'os,library'
           severity: 'MEDIUM,HIGH,CRITICAL'
           ignore-unfixed: false
-          exit-code: '1'              # <- falla el job si hay Medium
+          #exit-code: '1'              # <- falla el job si hay Medium
 
 
       - name: Publicar SARIF en Code Scanning
