@@ -158,7 +158,7 @@ jobs:
             test \
               ${SNYK_ORG:+--org="${SNYK_ORG}"} \
               --severity-threshold=medium \
-              --fail-on=none \
+              --fail-on=all \
               --sarif-file-output=/app/snyk-open-source.sarif
           ls -l snyk-open-source.sarif
         
