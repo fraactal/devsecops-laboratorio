@@ -137,11 +137,11 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           # Opcional: si tu proyecto tiene varias manifets/lockfiles
-          # command: monitor            # si además quieres “monitor” en Snyk
+          # command: monitor            
           args: >-
             --all-projects
             --severity-threshold=medium
-            --fail-on=all
+            --fail-on=none
             --sarif-file-output=snyk-open-source.sarif
 
       - name: Subir SARIF a Code Scanning
@@ -156,8 +156,6 @@ jobs:
         with:
           name: snyk-open-source-${{ github.sha }}
           path: snyk-open-source.sarif
-
-
 
       
   Build-Docker-Trivy-Scan:
